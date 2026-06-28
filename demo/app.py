@@ -158,7 +158,7 @@ def synthesize(text, meter_choice, seed):
 
 
 INTRO = """\
-# 🕉️ Vāgdhenu — Sanskrit chant
+# Vāgdhenu — Sanskrit chant
 Turn a **Sanskrit verse into traditional chant**. Just paste a verse and press **Chant it**.
 
 - Works with **any Indian script** — Devanagari (Hindi/Sanskrit), Kannada, Telugu, Malayalam,

@@ -1,6 +1,6 @@
 ---
 title: Vāgdhenu — Sanskrit Chant TTS
-emoji: 🕉️
+emoji: 🎶
 colorFrom: yellow
 colorTo: red
 sdk: gradio
