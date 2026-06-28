@@ -98,9 +98,10 @@
     <h2>Try it</h2>
     <p class="lead">Paste a Sanskrit verse in any Indian script — the meter is detected automatically.</p>
     <div class="demo">
-      <iframe src="https://prathoshap-vagdhenu-demo.hf.space?__theme=light" loading="lazy" allow="autoplay" title="Vāgdhenu live demo"></iframe>
+      <iframe id="demoframe" loading="lazy" allow="autoplay" title="Vāgdhenu live demo"></iframe>
     </div>
-    <p class="note">Runs on Hugging Face ZeroGPU; the first chant takes ~30–60s while the model loads.</p>
+    <p class="note">First chant takes ~10–60s while the model warms up. If the demo doesn't load,
+      use the <a id="backuplink" href="https://prathoshap-vagdhenu-demo.hf.space?__theme=light" target="_blank" rel="noopener">backup demo&nbsp;↗</a>.</p>
   </section>
 
   <section>
@@ -178,5 +179,20 @@
     Code Apache-2.0 · data CC-BY-4.0 · base models AI4Bharat IndicF5 &amp; NVIDIA BigVGAN-v2 (MIT).
   </footer>
 </div>
+<script>
+(function(){
+  // Use both: dedicated ece A6000 (primary, no quota) with the HF Space as automatic fallback.
+  var PRIMARY = "https://calculations-clay-springs-calvin.trycloudflare.com/?__theme=light";
+  var FALLBACK = "https://prathoshap-vagdhenu-demo.hf.space?__theme=light";
+  var frame = document.getElementById("demoframe");
+  function use(url){ frame.src = url; }
+  // Probe the primary; if unreachable within 6s, fall back to the HF Space.
+  var done = false, ctrl = new AbortController();
+  var timer = setTimeout(function(){ if(!done){ done=true; ctrl.abort(); use(FALLBACK); } }, 6000);
+  fetch(PRIMARY, {mode:"no-cors", signal:ctrl.signal, cache:"no-store"})
+    .then(function(){ if(!done){ done=true; clearTimeout(timer); use(PRIMARY); } })
+    .catch(function(){ if(!done){ done=true; clearTimeout(timer); use(FALLBACK); } });
+})();
+</script>
 </body>
 </html>
