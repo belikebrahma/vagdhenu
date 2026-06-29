@@ -191,17 +191,20 @@
 </div>
 <script>
 (function(){
-  // Use both: dedicated ece A6000 (primary, no quota) with the HF Space as automatic fallback.
-  var PRIMARY = "https://demo.prathosh.in/?__theme=light";
-  var FALLBACK = "https://prathoshap-vagdhenu-demo.hf.space?__theme=light";
+  // Spread load: send a share of visitors straight to the HF Space (its own GPU pool),
+  // the rest to the dedicated ece A6000 — which itself falls back to HF if unreachable.
+  var ECE = "https://demo.prathosh.in/?__theme=light";
+  var HF  = "https://prathoshap-vagdhenu-demo.hf.space?__theme=light";
+  var HF_SHARE = 0.5;   // fraction of visitors routed to the HF Space (tune as needed)
   var frame = document.getElementById("demoframe");
   function use(url){ frame.src = url; }
-  // Probe the primary; if unreachable within 6s, fall back to the HF Space.
+  if (Math.random() < HF_SHARE) { use(HF); return; }
+  // ece for the rest; if it's unreachable within 6s, fall back to HF too
   var done = false, ctrl = new AbortController();
-  var timer = setTimeout(function(){ if(!done){ done=true; ctrl.abort(); use(FALLBACK); } }, 6000);
-  fetch(PRIMARY, {mode:"no-cors", signal:ctrl.signal, cache:"no-store"})
-    .then(function(){ if(!done){ done=true; clearTimeout(timer); use(PRIMARY); } })
-    .catch(function(){ if(!done){ done=true; clearTimeout(timer); use(FALLBACK); } });
+  var timer = setTimeout(function(){ if(!done){ done=true; ctrl.abort(); use(HF); } }, 6000);
+  fetch(ECE, {mode:"no-cors", signal:ctrl.signal, cache:"no-store"})
+    .then(function(){ if(!done){ done=true; clearTimeout(timer); use(ECE); } })
+    .catch(function(){ if(!done){ done=true; clearTimeout(timer); use(HF); } });
 })();
 </script>
 </body>
