@@ -27,6 +27,8 @@ services:
       - AKASHA_R2_SECRET_ACCESS_KEY=${AKASHA_R2_SECRET_ACCESS_KEY}
       - AKASHA_R2_BUCKET=${AKASHA_R2_BUCKET}
       - AKASHA_R2_PUBLIC_DOMAIN=${AKASHA_R2_PUBLIC_DOMAIN}
+    security_opt:
+      - apparmor=unconfined
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
