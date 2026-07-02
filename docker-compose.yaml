@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  vagdhenu:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vagdhenu:latest
+    container_name: vagdhenu-brahma
+    ports:
+      - "8000:8000"
+    volumes:
+      # Bind the host directories on the Oracle Cloud VM
+      - /data/vagdhenu/models:/app/models:ro
+      - /data/vagdhenu/reference_bank:/app/src/reference_bank:ro
+      # Coolify local storage volume for caching generated audio files
+      - vagdhenu_out:/app/out
+    environment:
+      - VAGDHENU_DEVICE=cpu
+      - CHAMP_ROOT=/app/models
+      # Limit threads to prevent CPU thrashing on Oracle VM (ARM64 CPU execution optimization)
+      - OMP_NUM_THREADS=2
+      - MKL_NUM_THREADS=2
+      # Cloudflare R2 values (optional - leave blank to fallback to local files)
+      - AKASHA_R2_ACCOUNT_ID=${AKASHA_R2_ACCOUNT_ID}
+      - AKASHA_R2_ACCESS_KEY_ID=${AKASHA_R2_ACCESS_KEY_ID}
+      - AKASHA_R2_SECRET_ACCESS_KEY=${AKASHA_R2_SECRET_ACCESS_KEY}
+      - AKASHA_R2_BUCKET=${AKASHA_R2_BUCKET}
+      - AKASHA_R2_PUBLIC_DOMAIN=${AKASHA_R2_PUBLIC_DOMAIN}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  vagdhenu_out:
