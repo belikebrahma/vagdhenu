@@ -15,7 +15,7 @@ services:
     image: vagdhenu:latest
     container_name: vagdhenu-brahma
     ports:
-      - "8000:8000"
+      - "8020:8000"
     volumes:
       - ./models:/app/models:ro          # weight files (read-only)
       - ./src/reference_bank:/app/src/reference_bank:ro  # reference clips
