@@ -12,7 +12,7 @@ import numpy as np
 import soundfile as sf
 import torchaudio as _ta
 from pydub import AudioSegment
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Request, Depends
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from contextlib import asynccontextmanager
@@ -286,6 +286,35 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+# ── API Key Security Check ────────────────────────────────────────────────────────────
+async def verify_api_key(request: Request):
+    expected_key = os.environ.get("VAGDHENU_API_KEY")
+    if not expected_key:
+        return
+    
+    # 1. Check X-API-Key header
+    api_key = request.headers.get("X-API-Key")
+    
+    # 2. Check Authorization header (Bearer token)
+    if not api_key:
+        auth_header = request.headers.get("Authorization")
+        if auth_header:
+            if auth_header.lower().startswith("bearer "):
+                api_key = auth_header[7:].strip()
+            else:
+                api_key = auth_header.strip()
+                
+    if api_key != expected_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API Key. Please provide 'X-API-Key' or 'Authorization' header."
+        )
+
+# Log a startup warning if security is disabled
+if not os.environ.get("VAGDHENU_API_KEY"):
+    print("[Warning] VAGDHENU_API_KEY environment variable is NOT set. The API is running WITHOUT authentication.", flush=True)
+
 
 # ── API Models ────────────────────────────────────────────────────────────────────────
 class PadTimestamp(BaseModel):
@@ -564,7 +593,7 @@ def _check_cache(cache_key: str, req_format: str):
 
 # ── Controller logic ──────────────────────────────────────────────────────────────────
 @app.post("/tts", response_model=TTSResponse, status_code=status.HTTP_200_OK)
-async def generate_tts(req: TTSRequest):
+async def generate_tts(req: TTSRequest, _ = Depends(verify_api_key)):
     padas = _resolve_padas(req)
     if not padas:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Either 'text' or 'padas' must be provided with valid non-empty Sanskrit text.")
@@ -619,7 +648,7 @@ async def generate_tts(req: TTSRequest):
     return _upload_and_respond(audio_bytes, cache_key, dur, timestamps_data, req_format, meta)
 
 @app.post("/tts/batch", response_model=List[TTSResponse], status_code=status.HTTP_200_OK)
-async def generate_tts_batch(reqs: List[TTSRequest]):
+async def generate_tts_batch(reqs: List[TTSRequest], _ = Depends(verify_api_key)):
     """Batch render multiple TTS requests. Models loaded once; renders sequentially."""
     if not reqs:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Batch must contain at least one request.")
@@ -754,7 +783,7 @@ class SegmentResponse(BaseModel):
     method: str = Field(..., description="Splitting method: 'danda', 'newline', 'syllable', or 'raw'.")
 
 @app.post("/tts/segment", response_model=SegmentResponse, status_code=status.HTTP_200_OK)
-async def segment_text(req: SegmentRequest):
+async def segment_text(req: SegmentRequest, _ = Depends(verify_api_key)):
     """Split Sanskrit text into padas for TTS rendering.
 
     Tries in order:

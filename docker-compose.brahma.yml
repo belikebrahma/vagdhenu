@@ -23,6 +23,7 @@ services:
     environment:
       - CHAMP_ROOT=/app/models
       - VAGDHENU_DEVICE=cuda
+      - VAGDHENU_API_KEY=${VAGDHENU_API_KEY:-}
       # R2 / Akasha integration (optional — leave empty for local-only mode)
       - AKASHA_R2_ACCOUNT_ID=${AKASHA_R2_ACCOUNT_ID:-}
       - AKASHA_R2_ACCESS_KEY_ID=${AKASHA_R2_ACCESS_KEY_ID:-}

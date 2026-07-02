@@ -18,9 +18,9 @@ services:
     environment:
       - VAGDHENU_DEVICE=cpu
       - CHAMP_ROOT=/app/models
-      # Limit threads to prevent CPU thrashing on Oracle VM (ARM64 CPU execution optimization)
       - OMP_NUM_THREADS=2
       - MKL_NUM_THREADS=2
+      - VAGDHENU_API_KEY=${VAGDHENU_API_KEY}
       # Cloudflare R2 values (optional - leave blank to fallback to local files)
       - AKASHA_R2_ACCOUNT_ID=${AKASHA_R2_ACCOUNT_ID}
       - AKASHA_R2_ACCESS_KEY_ID=${AKASHA_R2_ACCESS_KEY_ID}
