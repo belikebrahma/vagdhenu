@@ -178,6 +178,19 @@ class TTSModels:
         self.ref_cache = {}
 
     def load(self, device: str = None):
+        self.backend = os.environ.get("VAGDHENU_INFERENCE_BACKEND", "local")
+        if self.backend == "replicate":
+            print(f"[Model] Using Replicate backend ({os.environ.get('VAGDHENU_REPLICATE_MODEL')}). Skipping local model loading.", flush=True)
+            # Load reference bank only
+            if os.path.exists(BANK_PATH):
+                self.bank = json.load(open(BANK_PATH, encoding="utf-8"))
+                self.primes = self.bank.get("repeat_primes", {})
+                for k, v in self.bank.items():
+                    if k.startswith("_") or not isinstance(v, dict) or "wav" not in v:
+                        continue
+                    self.lut[k] = v
+            return
+
         if device is None:
             self.device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
         else:
@@ -507,6 +520,41 @@ def _apply_dsp_and_stitch(bseg: List[np.ndarray], GAPS: List[np.ndarray], padas:
     timestamps_data = _compute_timestamps(bseg, GAPS, padas)
     return final_audio, dur, timestamps_data
 
+def _replicate_infer(ref_audio: str, ref_text: str, gen_text: str, speed: float, nfe_step: int, cfg_strength: float, fix_duration: Optional[float]):
+    """Helper to run inference on Replicate GPU worker"""
+    import replicate
+    import requests
+    
+    model_version = os.environ.get("VAGDHENU_REPLICATE_MODEL")
+    if not model_version:
+        raise ValueError("VAGDHENU_REPLICATE_MODEL environment variable must be set to use Replicate backend.")
+        
+    print(f"[Replicate] Running inference for: '{gen_text[:40]}...' using model {model_version}...", flush=True)
+    
+    # Open local reference audio file; replicate library will upload it automatically
+    with open(ref_audio, "rb") as f:
+        inputs = {
+            "ref_audio": f,
+            "ref_text": ref_text,
+            "gen_text": gen_text,
+            "speed": speed,
+            "nfe_step": nfe_step,
+            "cfg_strength": cfg_strength,
+        }
+        if fix_duration is not None:
+            inputs["fix_duration"] = fix_duration
+            
+        output_url = replicate.run(model_version, input=inputs)
+        
+    # Download the output WAV
+    resp = requests.get(output_url)
+    resp.raise_for_status()
+    
+    # Read the audio bytes back into a numpy array
+    audio_io = io.BytesIO(resp.content)
+    y, sr = sf.read(audio_io)
+    return y.astype(np.float32)
+
 def _render_padas(req: TTSRequest, padas: List[str]):
     """Core render: returns (final_audio, dur, timestamps). Does NOT handle caching or upload.
 
@@ -541,20 +589,31 @@ def _render_padas(req: TTSRequest, padas: List[str]):
         bseg = []
         japa_pada_labels = []
         for rep in range(req.repeat):
-            torch.manual_seed(req.seed + rep)
             _fixd = (ref_len + n_syl * sps) if (sps > 0 and n_syl) else None
-            w, sr, _ = infer_process(
-                ref_audio, ref_t, processed, models.cfm, models.cap,
-                mel_spec_type="vocos", speed=japa_speed,
-                nfe_step=64, cfg_strength=japa_cfg,
-                device=models.device, fix_duration=_fixd
-            )
-            w = np.array(w, dtype=np.float32)
-            if np.abs(w).max() > 1.5:
-                w = w / 32768.0
-            y = models.bvgan_decode(models.cap.last)
-            mx = np.abs(y).max()
-            y = y / mx * 0.97 if mx > 1 else y
+            if models.backend == "replicate":
+                y = _replicate_infer(
+                    ref_audio=ref_audio,
+                    ref_text=ref_t,
+                    gen_text=processed,
+                    speed=japa_speed,
+                    nfe_step=64,
+                    cfg_strength=japa_cfg,
+                    fix_duration=_fixd
+                )
+            else:
+                torch.manual_seed(req.seed + rep)
+                w, sr, _ = infer_process(
+                    ref_audio, ref_t, processed, models.cfm, models.cap,
+                    mel_spec_type="vocos", speed=japa_speed,
+                    nfe_step=64, cfg_strength=japa_cfg,
+                    device=models.device, fix_duration=_fixd
+                )
+                w = np.array(w, dtype=np.float32)
+                if np.abs(w).max() > 1.5:
+                    w = w / 32768.0
+                y = models.bvgan_decode(models.cap.last)
+                mx = np.abs(y).max()
+                y = y / mx * 0.97 if mx > 1 else y
             bseg.append(y)
             japa_pada_labels.append(f"{mantra_text.strip()}  ({rep + 1}/{req.repeat})")
 
@@ -590,27 +649,38 @@ def _render_padas(req: TTSRequest, padas: List[str]):
 
     bseg = []
     for i, p in enumerate(processed_pieces):
-        au = None
-        for att in range(4):
-            torch.manual_seed(req.seed + att)
-            _fixd = (ref_len + NSYLL[i]*sps) if (sps > 0 and NSYLL) else None
-            w, sr, _ = infer_process(
-                _ra, _rt, p, models.cfm, models.cap,
-                mel_spec_type="vocos", speed=req.speed,
-                nfe_step=64, cfg_strength=3.0,
-                device=models.device, fix_duration=_fixd
+        _fixd = (ref_len + NSYLL[i]*sps) if (sps > 0 and NSYLL) else None
+        if models.backend == "replicate":
+            y = _replicate_infer(
+                ref_audio=_ra,
+                ref_text=_rt,
+                gen_text=p,
+                speed=req.speed,
+                nfe_step=64,
+                cfg_strength=3.0,
+                fix_duration=_fixd
             )
-            w = np.array(w, dtype=np.float32)
-            if np.abs(w).max() > 1.5:
-                w = w / 32768.0
-            if float(np.sqrt((w**2).mean())) > 0.04:
+        else:
+            au = None
+            for att in range(4):
+                torch.manual_seed(req.seed + att)
+                w, sr, _ = infer_process(
+                    _ra, _rt, p, models.cfm, models.cap,
+                    mel_spec_type="vocos", speed=req.speed,
+                    nfe_step=64, cfg_strength=3.0,
+                    device=models.device, fix_duration=_fixd
+                )
+                w = np.array(w, dtype=np.float32)
+                if np.abs(w).max() > 1.5:
+                    w = w / 32768.0
+                if float(np.sqrt((w**2).mean())) > 0.04:
+                    au = w
+                    break
+            if au is None:
                 au = w
-                break
-        if au is None:
-            au = w
-        y = models.bvgan_decode(models.cap.last)
-        mx = np.abs(y).max()
-        y = y / mx * 0.97 if mx > 1 else y
+            y = models.bvgan_decode(models.cap.last)
+            mx = np.abs(y).max()
+            y = y / mx * 0.97 if mx > 1 else y
         bseg.append(y)
 
     return _apply_dsp_and_stitch(bseg, GAPS, padas, req)
