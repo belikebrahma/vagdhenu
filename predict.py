@@ -5,8 +5,9 @@ import numpy as np
 import soundfile as sf
 from cog import BasePredictor, Input, Path
 
-# Add src/ folder to Python path
+# Add src/ and BigVGAN/ folders to Python path
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
+sys.path.append("/app/BigVGAN")
 
 # Setup environment variables so api.py loads properly
 os.environ["VAGDHENU_DEVICE"] = "cuda"
