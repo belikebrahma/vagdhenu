@@ -1,0 +1,13 @@
+[
+  {
+    "id": "mahamrityunjaya",
+    "meter": "anushtubh",
+    "padas": [
+      "ॐ त्र्यम्बकं यजामहे सुगन्धिं पुष्टिवर्धनम्",
+      "उर्वारुकमिव बन्धनान्मृत्योर्मुक्षीय मामृतात्"
+    ],
+    "seed": 50,
+    "no_sandhi": false,
+    "out": "out/mahamrityunjaya.wav"
+  }
+]

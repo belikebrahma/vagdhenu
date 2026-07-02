@@ -1,0 +1,47 @@
+# Vagdhenu → Brahma OS Docker Compose
+# Start: docker compose -f docker-compose.brahma.yml up -d
+# Test:  curl -X POST http://localhost:8000/tts/segment -H 'Content-Type: application/json' -d '{"text":"ॐ नमः शिवाय"}'
+#
+# Requires:
+#   - NVIDIA Container Toolkit (nvidia-docker2) for GPU access
+#   - models/ directory with voice_steer_ema_*.pt and voc_bigvgan_EMA_*.pth
+#   - .env file or inline environment variables below
+
+services:
+  vagdhenu:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vagdhenu:latest
+    container_name: vagdhenu-brahma
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models:ro          # weight files (read-only)
+      - ./src/reference_bank:/app/src/reference_bank:ro  # reference clips
+      - vagdhenu_out:/app/out            # generated audio cache
+    environment:
+      - CHAMP_ROOT=/app/models
+      - VAGDHENU_DEVICE=cuda
+      # R2 / Akasha integration (optional — leave empty for local-only mode)
+      - AKASHA_R2_ACCOUNT_ID=${AKASHA_R2_ACCOUNT_ID:-}
+      - AKASHA_R2_ACCESS_KEY_ID=${AKASHA_R2_ACCESS_KEY_ID:-}
+      - AKASHA_R2_SECRET_ACCESS_KEY=${AKASHA_R2_SECRET_ACCESS_KEY:-}
+      - AKASHA_R2_BUCKET=${AKASHA_R2_BUCKET:-}
+      - AKASHA_R2_PUBLIC_DOMAIN=${AKASHA_R2_PUBLIC_DOMAIN:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  vagdhenu_out:
