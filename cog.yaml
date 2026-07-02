@@ -1,0 +1,33 @@
+build:
+  gpu: true
+  cuda: "12.4"
+  system_packages:
+    - "libsndfile1"
+    - "ffmpeg"
+    - "git"
+  python_version: "3.11"
+  python_packages:
+    - "torch==2.5.1"
+    - "torchaudio==2.5.1"
+    - "transformers==4.46.3"
+    - "accelerate==0.34.2"
+    - "vocos==0.1.0"
+    - "x-transformers==2.19.7"
+    - "numpy==1.26.4"
+    - "librosa==0.11.0"
+    - "soundfile"
+    - "huggingface_hub"
+    - "indic-transliteration"
+    - "fastapi"
+    - "uvicorn"
+    - "boto3"
+    - "pydantic"
+  run:
+    - "pip install git+https://github.com/ai4bharat/IndicF5.git@13f7c4d627cc10111aea8fe9c0039462cacacdc7"
+    - "git clone --depth 1 https://github.com/NVIDIA/BigVGAN.git /app/BigVGAN && pip install -e /app/BigVGAN"
+    - "mkdir -p /app/models"
+    - "curl -L https://huggingface.co/prathoshap/vagdhenu/resolve/main/voice_steer_ema_2026-06-17.pt -o /app/models/voice_steer_ema_2026-06-17.pt"
+    - "curl -L https://huggingface.co/prathoshap/vagdhenu/resolve/main/voc_bigvgan_EMA_2026-06-11.pth -o /app/models/voc_bigvgan_EMA_2026-06-11.pth"
+    - "curl -L https://huggingface.co/prathoshap/vagdhenu/resolve/main/vocab.txt -o /app/models/vocab.txt"
+
+predict: "predict.py:Predictor"
