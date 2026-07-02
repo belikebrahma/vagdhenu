@@ -1,6 +1,6 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.4.1
-torchaudio==2.4.1
+torch==2.5.1
+torchaudio==2.5.1
 git+https://github.com/ai4bharat/IndicF5.git@13f7c4d627cc10111aea8fe9c0039462cacacdc7
 transformers==4.46.3
 accelerate==0.34.2
@@ -12,7 +12,7 @@ soundfile
 huggingface_hub
 indic-transliteration
 # bigvgan: NVIDIA's repo, cloned in scripts/setup.sh (not a pip package)
-# torch==2.4.1 torchaudio==2.4.1 (+cu121): installed in scripts/setup.sh (validated version)
+# torch==2.5.1 torchaudio==2.5.1 (+cu121): installed in scripts/setup.sh (validated version)
 fastapi
 uvicorn
 boto3
