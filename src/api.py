@@ -3,6 +3,8 @@ import io
 import sys
 import json
 import glob
+import uuid
+import threading
 import torch
 import hashlib
 import argparse
@@ -288,32 +290,109 @@ app = FastAPI(
 )
 
 # ── API Key Security Check ────────────────────────────────────────────────────────────
-async def verify_api_key(request: Request):
-    expected_key = os.environ.get("VAGDHENU_API_KEY")
-    if not expected_key:
-        return
-    
-    # 1. Check X-API-Key header
-    api_key = request.headers.get("X-API-Key")
-    
-    # 2. Check Authorization header (Bearer token)
-    if not api_key:
-        auth_header = request.headers.get("Authorization")
-        if auth_header:
-            if auth_header.lower().startswith("bearer "):
-                api_key = auth_header[7:].strip()
-            else:
-                api_key = auth_header.strip()
-                
-    if api_key != expected_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing API Key. Please provide 'X-API-Key' or 'Authorization' header."
-        )
+ADMIN_TOKEN = os.environ.get("VAGDHENU_API_KEY", "")
+PUBLIC_PATHS = {"/health", "/docs", "/openapi.json", "/redoc"}
 
-# Log a startup warning if security is disabled
-if not os.environ.get("VAGDHENU_API_KEY"):
-    print("[Warning] VAGDHENU_API_KEY environment variable is NOT set. The API is running WITHOUT authentication.", flush=True)
+async def verify_api_key(request: Request):
+    if not ADMIN_TOKEN:
+        return  # No token configured = open access (dev mode)
+    if request.url.path in PUBLIC_PATHS or request.url.path.startswith("/out/"):
+        return  # Public paths
+    api_key = request.headers.get("X-API-Key", "")
+    auth_header = request.headers.get("Authorization", "")
+    if api_key == ADMIN_TOKEN:
+        return
+    if auth_header.startswith("Bearer ") and auth_header[7:] == ADMIN_TOKEN:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or missing API Key. Provide X-API-Key or Authorization: Bearer header."
+    )
+
+if not ADMIN_TOKEN:
+    print("[Warning] VAGDHENU_API_KEY is NOT set. API running WITHOUT authentication.", flush=True)
+else:
+    print(f"[Auth] API key authentication enabled.", flush=True)
+
+# ── Async Job Queue (in-memory) ──────────────────────────────────────────────────────
+_jobs: dict = {}
+_job_queue: list = []
+_jobs_lock = threading.Lock()
+_worker_busy = False
+
+def _process_job(job_id: str, req: "TTSRequest"):
+    """Background worker: run inference, store result in _jobs."""
+    global _worker_busy
+    try:
+        with _jobs_lock:
+            _jobs[job_id]["status"] = "running"
+        
+        padas = _resolve_padas(req)
+        if not padas:
+            raise ValueError("No valid text/padas")
+        
+        req_format = req.format.lower()
+        mode = req.mode.lower()
+        
+        hash_str = _compute_hash(padas, req)
+        cache_key = f"vagdhenu/{hash_str}.{req_format}"
+        
+        cached = _check_cache(cache_key, req_format)
+        if cached is not None:
+            with _jobs_lock:
+                _jobs[job_id]["status"] = "completed"
+                _jobs[job_id]["completed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                _jobs[job_id]["result"] = cached.model_dump()
+            return
+        
+        final_audio, dur, timestamps_data = _render_padas(req, padas)
+        
+        wav_io = io.BytesIO()
+        sf.write(wav_io, final_audio, SR, format="WAV")
+        audio_bytes = wav_io.getvalue()
+        
+        if req_format == "mp3":
+            audio_bytes = convert_wav_to_mp3(audio_bytes)
+        
+        meta = {
+            "urn": req.urn or "",
+            "mode": mode,
+            "meter": req.meter if mode != "japa" else "gadya",
+            "speed": req.speed,
+            "seed": req.seed,
+            "repeat": req.repeat,
+            "format": req_format,
+            "no_sandhi": req.no_sandhi,
+            "text": padas[0][:200] if padas else "",
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        } if req.embed_metadata else None
+        
+        result = _upload_and_respond(audio_bytes, cache_key, dur, timestamps_data, req_format, meta)
+        
+        with _jobs_lock:
+            _jobs[job_id]["status"] = "completed"
+            _jobs[job_id]["completed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            _jobs[job_id]["result"] = result.model_dump()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        with _jobs_lock:
+            _jobs[job_id]["status"] = "failed"
+            _jobs[job_id]["completed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            _jobs[job_id]["error"] = str(e)
+    finally:
+        _worker_busy = False
+        _try_dequeue()
+
+def _try_dequeue():
+    """Start next queued job if worker is idle."""
+    global _worker_busy
+    with _jobs_lock:
+        if _worker_busy or not _job_queue:
+            return
+        _worker_busy = True
+        job_id = _job_queue.pop(0)
+    threading.Thread(target=_process_job, args=(job_id, _jobs[job_id]["request"]), daemon=True).start()
 
 
 # ── API Models ────────────────────────────────────────────────────────────────────────
@@ -856,3 +935,80 @@ def convert_wav_to_mp3(wav_bytes: bytes) -> bytes:
     mp3_io = io.BytesIO()
     audio.export(mp3_io, format="mp3", bitrate="192k")
     return mp3_io.getvalue()
+
+
+# ── Async Job Endpoints ───────────────────────────────────────────────────────────────
+class JobSubmitResponse(BaseModel):
+    job_id: str
+    status: str
+    message: str
+
+class JobStatusResponse(BaseModel):
+    job_id: str
+    status: str
+    created_at: str
+    completed_at: Optional[str] = None
+    result: Optional[TTSResponse] = None
+    error: Optional[str] = None
+
+@app.post("/tts/async", response_model=JobSubmitResponse, status_code=status.HTTP_202_ACCEPTED)
+async def submit_async_tts(req: TTSRequest, _=Depends(verify_api_key)):
+    """
+    Submit a TTS job for async processing. Returns immediately with a job_id.
+    Poll GET /tts/jobs/{job_id} for result.
+
+    This endpoint avoids proxy timeouts — ideal for CPU servers where inference
+    takes minutes. Jobs are processed sequentially via a background thread.
+    """
+    padas = _resolve_padas(req)
+    if not padas:
+        raise HTTPException(status_code=400, detail="Either 'text' or 'padas' must be provided.")
+    mode = req.mode.lower()
+    if mode not in ("parayana", "japa"):
+        raise HTTPException(status_code=400, detail="Mode must be 'parayana' or 'japa'.")
+
+    job_id = str(uuid.uuid4())[:12]
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "job_id": job_id,
+            "status": "queued",
+            "created_at": now,
+            "completed_at": None,
+            "result": None,
+            "error": None,
+            "request": req,
+        }
+        _job_queue.append(job_id)
+        queue_pos = len(_job_queue)
+    
+    _try_dequeue()
+    return JobSubmitResponse(
+        job_id=job_id,
+        status="queued",
+        message=f"Job queued (position {queue_pos}). Poll /tts/jobs/{job_id} for status."
+    )
+
+@app.get("/tts/jobs/{job_id}", response_model=JobStatusResponse)
+async def get_job_status(job_id: str):
+    """Get status of an async TTS job."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
+    return JobStatusResponse(
+        job_id=job["job_id"],
+        status=job["status"],
+        created_at=job["created_at"],
+        completed_at=job.get("completed_at"),
+        result=TTSResponse(**job["result"]) if job.get("result") else None,
+        error=job.get("error"),
+    )
+
+@app.get("/tts/jobs")
+async def list_jobs(limit: int = 20):
+    """List recent jobs (max 50)."""
+    with _jobs_lock:
+        items = sorted(_jobs.values(), key=lambda j: j["created_at"], reverse=True)[:min(limit, 50)]
+    return {"count": len(items), "jobs": items}
