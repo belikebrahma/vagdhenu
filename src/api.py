@@ -709,7 +709,7 @@ def _upload_and_respond(audio_bytes: bytes, cache_key: str, dur: float, timestam
     if meta:
         audio_bytes = _embed_metadata(audio_bytes, meta, req_format)
     
-    timestamps_json = json.dumps(timestamps_data, ensure_ascii=False)
+    timestamps_json = json.dumps(timestamps_data, ensure_ascii=True)
     if r2_client and R2_BUCKET_NAME:
         r2_client.put_object(
             Bucket=R2_BUCKET_NAME,
