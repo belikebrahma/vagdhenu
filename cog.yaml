@@ -30,5 +30,6 @@ build:
     - "curl -L https://huggingface.co/prathoshap/vagdhenu/resolve/main/voice_steer_ema_2026-06-17.pt -o /app/models/voice_steer_ema_2026-06-17.pt"
     - "curl -L https://huggingface.co/prathoshap/vagdhenu/resolve/main/voc_bigvgan_EMA_2026-06-11.pth -o /app/models/voc_bigvgan_EMA_2026-06-11.pth"
     - "curl -L https://huggingface.co/prathoshap/vagdhenu/resolve/main/vocab.txt -o /app/models/vocab.txt"
+    - "pip install fastapi==0.95.2 pydantic==1.10.15"
 
 predict: "predict.py:Predictor"
