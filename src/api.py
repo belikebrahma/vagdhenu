@@ -547,14 +547,26 @@ def _replicate_infer(ref_audio: str, ref_text: str, gen_text: str, speed: float,
         if fix_duration is not None:
             inputs["fix_duration"] = fix_duration
             
-        output_url = client.run(model_version, input=inputs, wait=300)
+        output = client.run(model_version, input=inputs, wait=300)
         
-    # Download the output WAV
-    resp = requests.get(output_url)
-    resp.raise_for_status()
+    # Handle Replicate SDK output:
+    #   SDK ≥1.0: returns FileOutput (has .read() method)
+    #   SDK <1.0: returns a URL string
+    if hasattr(output, 'read'):
+        # FileOutput — read bytes directly (no extra HTTP call)
+        audio_bytes = output.read()
+    elif isinstance(output, str):
+        # Legacy URL string
+        resp = requests.get(output)
+        resp.raise_for_status()
+        audio_bytes = resp.content
+    else:
+        # Possibly a list with a single FileOutput
+        item = output[0] if isinstance(output, list) else output
+        audio_bytes = item.read() if hasattr(item, 'read') else requests.get(str(item)).content
     
     # Read the audio bytes back into a numpy array
-    audio_io = io.BytesIO(resp.content)
+    audio_io = io.BytesIO(audio_bytes)
     y, sr = sf.read(audio_io)
     return y.astype(np.float32)
 
