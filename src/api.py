@@ -835,20 +835,26 @@ async def generate_tts(req: TTSRequest, _ = Depends(verify_api_key)):
 
 @app.post("/tts/batch", response_model=List[TTSResponse], status_code=status.HTTP_200_OK)
 async def generate_tts_batch(reqs: List[TTSRequest], _ = Depends(verify_api_key)):
-    """Batch render multiple TTS requests. Models loaded once; renders sequentially."""
+    """Batch render multiple TTS requests. Processes cached items instantly, and generates
+    uncached items in parallel using a thread pool to fully utilize the GPU backend."""
     if not reqs:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Batch must contain at least one request.")
     if len(reqs) > BATCH_MAX:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Batch limited to {BATCH_MAX} requests (server constraint).")
 
-    results: List[TTSResponse] = []
+    results: List[Optional[TTSResponse]] = [None] * len(reqs)
+    todo_indices = []
+
+    # 1. Validate all requests and check cache first
     for idx, req in enumerate(reqs):
         padas = _resolve_padas(req)
         if not padas:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Item {idx}: either 'text' or 'padas' must be provided.")
+        
         req_format = req.format.lower()
         if req_format not in ("wav", "mp3"):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Item {idx}: unsupported format '{req_format}'.")
+        
         mode = req.mode.lower()
         if mode not in ("parayana", "japa"):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Item {idx}: mode must be 'parayana' or 'japa'.")
@@ -858,41 +864,62 @@ async def generate_tts_batch(reqs: List[TTSRequest], _ = Depends(verify_api_key)
 
         cached = _check_cache(cache_key, req_format)
         if cached is not None:
-            results.append(cached)
-            continue
+            results[idx] = cached
+        else:
+            todo_indices.append(idx)
 
-        try:
-            final_audio, dur, timestamps_data = _render_padas(req, padas)
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Item {idx} inference failed: {str(e)}")
+    # 2. Process uncached items in parallel
+    if todo_indices:
+        from concurrent.futures import ThreadPoolExecutor
 
-        wav_io = io.BytesIO()
-        sf.write(wav_io, final_audio, SR, format="WAV")
-        audio_bytes = wav_io.getvalue()
+        def process_item(idx):
+            req = reqs[idx]
+            padas = _resolve_padas(req)
+            req_format = req.format.lower()
+            mode = req.mode.lower()
+            hash_str = _compute_hash(padas, req)
+            cache_key = f"vagdhenu/{hash_str}.{req_format}"
 
-        if req_format == "mp3":
             try:
-                audio_bytes = convert_wav_to_mp3(audio_bytes)
+                final_audio, dur, timestamps_data = _render_padas(req, padas)
             except Exception as e:
-                print(f"[Error] MP3 conversion failed for item {idx}: {e}", flush=True)
-                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Item {idx}: MP3 conversion failed.")
+                import traceback
+                traceback.print_exc()
+                raise RuntimeError(f"Item {idx} inference failed: {str(e)}")
 
-        meta = {
-            "urn": req.urn or "",
-            "mode": mode,
-            "meter": req.meter if mode != "japa" else "gadya",
-            "speed": req.speed,
-            "seed": req.seed,
-            "repeat": req.repeat,
-            "format": req_format,
-            "no_sandhi": req.no_sandhi,
-            "text": padas[0][:200] if padas else "",
-            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        } if req.embed_metadata else None
+            wav_io = io.BytesIO()
+            sf.write(wav_io, final_audio, SR, format="WAV")
+            audio_bytes = wav_io.getvalue()
 
-        results.append(_upload_and_respond(audio_bytes, cache_key, dur, timestamps_data, req_format, meta))
+            if req_format == "mp3":
+                try:
+                    audio_bytes = convert_wav_to_mp3(audio_bytes)
+                except Exception as e:
+                    raise RuntimeError(f"Item {idx} MP3 conversion failed: {str(e)}")
+
+            meta = {
+                "urn": req.urn or "",
+                "mode": mode,
+                "meter": req.meter if mode != "japa" else "gadya",
+                "speed": req.speed,
+                "seed": req.seed,
+                "repeat": req.repeat,
+                "format": req_format,
+                "no_sandhi": req.no_sandhi,
+                "text": padas[0][:200] if padas else "",
+                "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            } if req.embed_metadata else None
+
+            return _upload_and_respond(audio_bytes, cache_key, dur, timestamps_data, req_format, meta)
+
+        # Run up to 16 threads concurrently (safely within VPS system limits)
+        with ThreadPoolExecutor(max_workers=min(len(todo_indices), 16)) as executor:
+            try:
+                future_results = list(executor.map(process_item, todo_indices))
+                for i, idx in enumerate(todo_indices):
+                    results[idx] = future_results[i]
+            except Exception as e:
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
     return results
 
