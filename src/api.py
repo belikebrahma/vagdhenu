@@ -430,6 +430,9 @@ class TTSRequest(BaseModel):
     chorus: bool = Field(False, description="Apply a multi-voice chorus chanting effect.")
     tanpura: Optional[str] = Field(None, description="Optional background drone: 'C#', 'D', 'G', etc.")
     pause_duration: Optional[float] = Field(None, description="Optional custom pause duration in seconds between padas.")
+    nfe_step: int = Field(64, ge=8, le=256, description="ODE solver steps. 64=standard, 32=fast (2x speed, 50% cost).")
+    cfg_strength: Optional[float] = Field(None, ge=0.5, le=5.0, description="Classifier-free guidance scale. Default varies by mode.")
+    fix_duration: Optional[float] = Field(None, ge=0.5, le=60.0, description="Fix output duration in seconds.")
 
 class TTSResponse(BaseModel):
     url: str = Field(..., description="The direct URL to download/stream the generated audio.")
