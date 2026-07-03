@@ -18,10 +18,10 @@ build:
     - "soundfile"
     - "huggingface_hub"
     - "indic-transliteration"
-    - "fastapi"
+    - "fastapi==0.95.2"
+    - "pydantic==1.10.15"
     - "uvicorn"
     - "boto3"
-    - "pydantic"
   run:
     - "pip install git+https://github.com/ai4bharat/IndicF5.git@13f7c4d627cc10111aea8fe9c0039462cacacdc7"
     - "git clone --depth 1 https://github.com/NVIDIA/BigVGAN.git /app/BigVGAN"
