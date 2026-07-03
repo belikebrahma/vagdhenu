@@ -601,13 +601,13 @@ def _render_padas(req: TTSRequest, padas: List[str]):
 
         # Japa parameters: slower, lower cfg for flatter prosody, wider gap
         japa_speed = req.speed if req.speed <= 0.95 else 0.78
-        japa_cfg = 1.5  # lower = less reference-driven contour
+        japa_cfg = req.cfg_strength if req.cfg_strength is not None else 1.5  # lower = less reference-driven contour
         japa_gap_s = req.pause_duration if req.pause_duration is not None else 1.2  # breathing room between repetitions
 
         if models.backend == "replicate":
             # Replicate Optimization: Generate the base audio segment once on Replicate,
             # then duplicate in-memory to save N-1 API calls and costs.
-            _fixd = (ref_len + n_syl * sps) if (sps > 0 and n_syl) else None
+            _fixd = req.fix_duration if req.fix_duration is not None else ((ref_len + n_syl * sps) if (sps > 0 and n_syl) else None)
             y_base = _replicate_infer(
                 ref_audio=ref_audio,
                 ref_text=ref_t,
@@ -623,7 +623,7 @@ def _render_padas(req: TTSRequest, padas: List[str]):
             bseg = []
             japa_pada_labels = []
             for rep in range(req.repeat):
-                _fixd = (ref_len + n_syl * sps) if (sps > 0 and n_syl) else None
+                _fixd = req.fix_duration if req.fix_duration is not None else ((ref_len + n_syl * sps) if (sps > 0 and n_syl) else None)
                 torch.manual_seed(req.seed + rep)
                 w, sr, _ = infer_process(
                     ref_audio, ref_t, processed, models.cfm, models.cap,
@@ -683,27 +683,28 @@ def _render_padas(req: TTSRequest, padas: List[str]):
                 gen_text=p,
                 speed=req.speed,
                 nfe_step=req.nfe_step,
-                cfg_strength=3.0,
+                cfg_strength=req.cfg_strength if req.cfg_strength is not None else 3.0,
                 fix_duration=_fixd
             )
             
         pada_args = []
         for i, p in enumerate(processed_pieces):
-            _fixd = (ref_len + NSYLL[i]*sps) if (sps > 0 and NSYLL) else None
+            _fixd = req.fix_duration if req.fix_duration is not None else ((ref_len + NSYLL[i]*sps) if (sps > 0 and NSYLL) else None)
             pada_args.append((i, p, _fixd))
             
         with ThreadPoolExecutor(max_workers=len(processed_pieces)) as executor:
             bseg = list(executor.map(run_pada, pada_args))
     else:
         for i, p in enumerate(processed_pieces):
-            _fixd = (ref_len + NSYLL[i]*sps) if (sps > 0 and NSYLL) else None
+            _fixd = req.fix_duration if req.fix_duration is not None else ((ref_len + NSYLL[i]*sps) if (sps > 0 and NSYLL) else None)
             au = None
             for att in range(4):
                 torch.manual_seed(req.seed + att)
                 w, sr, _ = infer_process(
                     _ra, _rt, p, models.cfm, models.cap,
                     mel_spec_type="vocos", speed=req.speed,
-                    nfe_step=req.nfe_step, cfg_strength=3.0,
+                    nfe_step=req.nfe_step,
+                    cfg_strength=req.cfg_strength if req.cfg_strength is not None else 3.0,
                     device=models.device, fix_duration=_fixd
                 )
                 w = np.array(w, dtype=np.float32)
