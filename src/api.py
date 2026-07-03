@@ -531,6 +531,9 @@ def _replicate_infer(ref_audio: str, ref_text: str, gen_text: str, speed: float,
         
     print(f"[Replicate] Running inference for: '{gen_text[:40]}...' using model {model_version}...", flush=True)
     
+    # Initialize Replicate client with a 5-minute timeout to handle cold starts
+    client = replicate.Client(api_token=os.environ.get("REPLICATE_API_TOKEN"), timeout=300.0)
+    
     # Open local reference audio file; replicate library will upload it automatically
     with open(ref_audio, "rb") as f:
         inputs = {
@@ -544,7 +547,7 @@ def _replicate_infer(ref_audio: str, ref_text: str, gen_text: str, speed: float,
         if fix_duration is not None:
             inputs["fix_duration"] = fix_duration
             
-        output_url = replicate.run(model_version, input=inputs)
+        output_url = client.run(model_version, input=inputs)
         
     # Download the output WAV
     resp = requests.get(output_url)
