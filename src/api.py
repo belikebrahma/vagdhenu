@@ -547,7 +547,7 @@ def _replicate_infer(ref_audio: str, ref_text: str, gen_text: str, speed: float,
         if fix_duration is not None:
             inputs["fix_duration"] = fix_duration
             
-        output_url = client.run(model_version, input=inputs)
+        output_url = client.run(model_version, input=inputs, wait=300)
         
     # Download the output WAV
     resp = requests.get(output_url)
