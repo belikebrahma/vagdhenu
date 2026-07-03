@@ -13,6 +13,40 @@ sys.path.append("/app/BigVGAN")
 os.environ["VAGDHENU_DEVICE"] = "cuda"
 os.environ["CHAMP_ROOT"] = "/app/models"
 
+# Mock wandb entirely — Cog pins Pydantic v1 but wandb requires Pydantic v2.
+# We never use wandb for inference, so we intercept all wandb.* imports.
+import types
+import importlib
+import importlib.abc
+import importlib.machinery
+
+class _FakeModule(types.ModuleType):
+    """A fake module that returns itself for any attribute access."""
+    def __init__(self, name):
+        super().__init__(name)
+        self.__path__ = ['/fake/wandb']
+        self.__package__ = name
+        self.__all__ = []
+        self.__spec__ = importlib.machinery.ModuleSpec(name, None, is_package=True)
+    def __getattr__(self, name):
+        fullname = f'{self.__name__}.{name}'
+        if fullname not in sys.modules:
+            sys.modules[fullname] = _FakeModule(fullname)
+        return sys.modules[fullname]
+
+class _WandbFinder(importlib.abc.MetaPathFinder):
+    """Intercept any import of wandb or wandb.* and return a _FakeModule."""
+    def find_spec(self, fullname, path, target=None):
+        if fullname == 'wandb' or fullname.startswith('wandb.'):
+            return importlib.machinery.ModuleSpec(fullname, self, is_package=True)
+        return None
+    def create_module(self, spec):
+        return _FakeModule(spec.name)
+    def exec_module(self, module):
+        pass
+
+sys.meta_path.insert(0, _WandbFinder())
+
 from api import TTSModels, infer_process, SR
 
 class Predictor(BasePredictor):
