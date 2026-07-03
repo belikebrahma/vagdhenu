@@ -601,26 +601,31 @@ def _render_padas(req: TTSRequest, padas: List[str]):
         japa_cfg = 1.5  # lower = less reference-driven contour
         japa_gap_s = req.pause_duration if req.pause_duration is not None else 1.2  # breathing room between repetitions
 
-        bseg = []
-        japa_pada_labels = []
-        for rep in range(req.repeat):
+        if models.backend == "replicate":
+            # Replicate Optimization: Generate the base audio segment once on Replicate,
+            # then duplicate in-memory to save N-1 API calls and costs.
             _fixd = (ref_len + n_syl * sps) if (sps > 0 and n_syl) else None
-            if models.backend == "replicate":
-                y = _replicate_infer(
-                    ref_audio=ref_audio,
-                    ref_text=ref_t,
-                    gen_text=processed,
-                    speed=japa_speed,
-                    nfe_step=64,
-                    cfg_strength=japa_cfg,
-                    fix_duration=_fixd
-                )
-            else:
+            y_base = _replicate_infer(
+                ref_audio=ref_audio,
+                ref_text=ref_t,
+                gen_text=processed,
+                speed=japa_speed,
+                nfe_step=req.nfe_step,
+                cfg_strength=japa_cfg,
+                fix_duration=_fixd
+            )
+            bseg = [y_base] * req.repeat
+            japa_pada_labels = [f"{mantra_text.strip()}  ({rep + 1}/{req.repeat})" for rep in range(req.repeat)]
+        else:
+            bseg = []
+            japa_pada_labels = []
+            for rep in range(req.repeat):
+                _fixd = (ref_len + n_syl * sps) if (sps > 0 and n_syl) else None
                 torch.manual_seed(req.seed + rep)
                 w, sr, _ = infer_process(
                     ref_audio, ref_t, processed, models.cfm, models.cap,
                     mel_spec_type="vocos", speed=japa_speed,
-                    nfe_step=64, cfg_strength=japa_cfg,
+                    nfe_step=req.nfe_step, cfg_strength=japa_cfg,
                     device=models.device, fix_duration=_fixd
                 )
                 w = np.array(w, dtype=np.float32)
@@ -629,8 +634,8 @@ def _render_padas(req: TTSRequest, padas: List[str]):
                 y = models.bvgan_decode(models.cap.last)
                 mx = np.abs(y).max()
                 y = y / mx * 0.97 if mx > 1 else y
-            bseg.append(y)
-            japa_pada_labels.append(f"{mantra_text.strip()}  ({rep + 1}/{req.repeat})")
+                bseg.append(y)
+                japa_pada_labels.append(f"{mantra_text.strip()}  ({rep + 1}/{req.repeat})")
 
         # Generate gaps between repetitions
         japa_gaps = [np.zeros(int(japa_gap_s * SR), dtype=np.float32) for _ in range(len(bseg) - 1)]
@@ -663,26 +668,39 @@ def _render_padas(req: TTSRequest, padas: List[str]):
     GAPS = [np.zeros(int(gap_duration*SR) + (int(gap_halant_duration*SR) if _ends_halant(_p) else 0), dtype=np.float32) for _p in processed_pieces]
 
     bseg = []
-    for i, p in enumerate(processed_pieces):
-        _fixd = (ref_len + NSYLL[i]*sps) if (sps > 0 and NSYLL) else None
-        if models.backend == "replicate":
-            y = _replicate_infer(
+    if models.backend == "replicate":
+        # Replicate Optimization: Run all padas in parallel using a ThreadPoolExecutor
+        from concurrent.futures import ThreadPoolExecutor
+        
+        def run_pada(args):
+            idx, p, _fixd = args
+            return _replicate_infer(
                 ref_audio=_ra,
                 ref_text=_rt,
                 gen_text=p,
                 speed=req.speed,
-                nfe_step=64,
+                nfe_step=req.nfe_step,
                 cfg_strength=3.0,
                 fix_duration=_fixd
             )
-        else:
+            
+        pada_args = []
+        for i, p in enumerate(processed_pieces):
+            _fixd = (ref_len + NSYLL[i]*sps) if (sps > 0 and NSYLL) else None
+            pada_args.append((i, p, _fixd))
+            
+        with ThreadPoolExecutor(max_workers=len(processed_pieces)) as executor:
+            bseg = list(executor.map(run_pada, pada_args))
+    else:
+        for i, p in enumerate(processed_pieces):
+            _fixd = (ref_len + NSYLL[i]*sps) if (sps > 0 and NSYLL) else None
             au = None
             for att in range(4):
                 torch.manual_seed(req.seed + att)
                 w, sr, _ = infer_process(
                     _ra, _rt, p, models.cfm, models.cap,
                     mel_spec_type="vocos", speed=req.speed,
-                    nfe_step=64, cfg_strength=3.0,
+                    nfe_step=req.nfe_step, cfg_strength=3.0,
                     device=models.device, fix_duration=_fixd
                 )
                 w = np.array(w, dtype=np.float32)
@@ -696,7 +714,7 @@ def _render_padas(req: TTSRequest, padas: List[str]):
             y = models.bvgan_decode(models.cap.last)
             mx = np.abs(y).max()
             y = y / mx * 0.97 if mx > 1 else y
-        bseg.append(y)
+            bseg.append(y)
 
     return _apply_dsp_and_stitch(bseg, GAPS, padas, req)
 
