@@ -68,13 +68,14 @@ class Predictor(BasePredictor):
         """Run a single prediction on the model"""
         ref_audio_str = str(ref_audio)
         
-        # Run core inference
-        w, sr, _ = infer_process(
-            ref_audio_str, ref_text, gen_text, self.models.cfm, self.models.cap,
-            mel_spec_type="vocos", speed=speed,
-            nfe_step=nfe_step, cfg_strength=cfg_strength,
-            device="cuda", fix_duration=fix_duration
-        )
+        # Run core inference inside bfloat16 autocast context
+        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            w, sr, _ = infer_process(
+                ref_audio_str, ref_text, gen_text, self.models.cfm, self.models.cap,
+                mel_spec_type="vocos", speed=speed,
+                nfe_step=nfe_step, cfg_strength=cfg_strength,
+                device="cuda", fix_duration=fix_duration
+            )
         
         # Decode using BigVGAN
         y = self.models.bvgan_decode(self.models.cap.last)
