@@ -6,6 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: vagdhenu:latest
+    command: ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
     container_name: vagdhenu-brahma
     ports:
       - "8020:8000"
